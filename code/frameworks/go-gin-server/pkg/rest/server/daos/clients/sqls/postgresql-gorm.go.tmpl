@@ -1,0 +1,68 @@
+package sqls
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"sync"
+
+	log "github.com/sirupsen/logrus"
+	"github.com/uptrace/opentelemetry-go-extra/otelgorm"
+	"gorm.io/driver/postgres" 
+	"gorm.io/gorm"
+)
+
+var (
+	ErrDuplicate    = errors.New("record already exists")
+	ErrNotExists    = errors.New("row not exists")
+	ErrUpdateFailed = errors.New("update failed")
+	ErrDeleteFailed = errors.New("delete failed")
+)
+
+var (
+	user     = os.Getenv("POSTGRESQL_DB_USER")
+	password = os.Getenv("POSTGRESQL_DB_PASSWORD")
+	host     = os.Getenv("POSTGRESQL_DB_HOST")
+	port     = os.Getenv("POSTGRESQL_DB_PORT")
+	database = os.Getenv("POSTGRESQL_DB_DATABASE")
+)
+
+
+type PostgreSQLClient struct {
+	DB *gorm.DB
+}
+
+var postgreSQLClient *PostgreSQLClient 
+
+func InitGormPOSTGRESQLDB() (*PostgreSQLClient, error) {
+	var o sync.Once
+	var err error
+	var db *gorm.DB
+
+	o.Do(func() {
+		dataSource := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s",
+			host, user, password, database, port)
+
+		// Open a connection to the PostgreSQL database
+		db, err = gorm.Open(postgres.Open(dataSource), &gorm.Config{})
+		if err != nil {
+			log.Debugf("database connection error: %v", err)
+			os.Exit(1)
+		}
+
+		serviceName := os.Getenv("SERVICE_NAME")
+		collectorURL := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+		if len(serviceName) > 0 && len(collectorURL) > 0 {
+			if err := db.Use(otelgorm.NewPlugin()); err != nil {
+				log.Debugf("unable to attach opentelemetry plugin error: %v", err)
+				os.Exit(1)
+			}
+		}
+
+		postgreSQLClient = &PostgreSQLClient{
+			DB: db,
+		}
+	})
+
+	return postgreSQLClient, nil
+}
